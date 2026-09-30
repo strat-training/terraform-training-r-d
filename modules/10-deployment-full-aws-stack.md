@@ -184,6 +184,14 @@ Create `EVIDENCE.md` at the root of your repository, and record this deployment 
 - the destroy summary, and the empty `terraform state list`, with the date and time.
 - *Done when:* each entry holds your **real** output (your account ID, your ALB name), not a copy of the expected values above.
 
+**N2 — Audit your modules for hardcoded values and naming drift** (capstone requirements 17, 18)
+With nine modules written across M3–M9, it's easy for one to quietly skip a pattern the others follow. Go back through every file in `modules/`, module by module, and check:
+- Nothing that should vary by environment or account is typed as a literal — region, account ID, CIDR, instance size, or any value already exposed as a `variable` in a *sibling* module.
+- Every AWS-side resource name is still built from `var.name` (or `var.name_prefix`), never a literal string.
+- Every child module's `required_providers` still states a **minimum** version (`>= 6.0`), not an exact pin — that stays a root-only rule.
+- *Hint:* compare modules that do similar jobs. If one hardcodes something a sibling module takes as an input, that's a finding. `grep -rnE '"t3\.|"db\.|ap-southeast-1"' modules/*/main.tf` from your repo root (works on both macOS and Linux `grep`) is a fast way to surface literals worth a second look.
+- *Done when:* for every module, you can say which inputs make it reusable in a different account or region without editing the module's own code — and you've fixed anything that couldn't yet.
+
 ## Checkpoint (self-assessed)
 
 - [ ] Your plan matched the expected total, or you can explain the difference module by module.

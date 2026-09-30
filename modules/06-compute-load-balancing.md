@@ -2,7 +2,7 @@
 
 ## Objective
 
-Run servers you never log in to. Build an `asg` module (Launch Template + Auto Scaling group) and an `alb` module (load balancer + target group + listener). Each is called twice: once for Web, once for App. **Planned refactor:** the Web ALB becomes the only internet edge.
+Run servers you never log in to. Build an `asg` module (Launch Template + Auto Scaling group) and an `alb` module (load balancer + target group + listener). Each is called twice: once for Web, guided step by step — then once for App, from the same pattern, on your own. **Planned refactor:** the Web ALB becomes the only internet edge.
 
 | | |
 |---|---|
@@ -238,7 +238,7 @@ output "name" {
    ```hcl
    "api/base_url" = "http://${module.app_alb.dns_name}:8080"
    ```
-3. Call each module twice, and add a guard so App servers never run without their NAT:
+3. Call each module for the **Web** tier — this part is given in full:
    ```hcl
    module "web_alb" {
      source = "../../modules/alb"
@@ -250,18 +250,6 @@ output "name" {
      internal          = false
      port              = 80
      health_check_path = "/"
-   }
-
-   module "app_alb" {
-     source = "../../modules/alb"
-
-     name              = "${var.project}-${var.environment}-app"
-     vpc_id            = module.network.vpc_id
-     subnet_ids        = module.network.subnet_ids["app"]
-     security_group_id = module.security_groups.ids["app_alb"]
-     internal          = true
-     port              = 8080
-     health_check_path = "/health"
    }
 
    module "web_asg" {
@@ -277,21 +265,23 @@ output "name" {
      target_group_arns     = [module.web_alb.target_group_arn]
      user_data             = templatefile("${path.module}/templates/web.sh.tftpl", { region = var.aws_region, ssm_prefix = local.ssm_prefix })
    }
+   ```
+   **Now call both modules for the App tier yourself — `module "app_alb"` and `module "app_asg"`.** No code is given. Every module file you've built in this course so far reuses the exact same two-tier shape (a Web version and an App version, wired to `network.subnet_ids["app"]` and the App-tier security groups instead of Web's), so use that pattern here too. What has to match exactly, because every module from here to M12 refers to it by name:
 
-   module "app_asg" {
-     source = "../../modules/asg"
+   | | `app_alb` | `app_asg` |
+   |---|---|---|
+   | Module call name | `app_alb` | `app_asg` |
+   | `name` input | ends in `-app`, not `-web` | ends in `-app`, not `-web` |
+   | `subnet_ids` tier | `"app"` | `"app"` |
+   | Security group | `module.security_groups.ids["app_alb"]` | `[module.security_groups.ids["app"]]` |
+   | `internal` / traffic | `true` — no internet edge | — |
+   | `port` / health check | `8080`, path `/health` | — |
+   | `min_size` / `max_size` | — | `2` / `4` — the App tier runs one more server than Web, since it's the one every quiz answer passes through |
+   | `target_group_arns` | — | `[module.app_alb.target_group_arn]` |
+   | `user_data` template | — | `templates/app.sh.tftpl`, with the same two template variables as `web_asg` |
 
-     name                  = "${var.project}-${var.environment}-app"
-     ami_id                = data.aws_ami.ubuntu.id
-     subnet_ids            = module.network.subnet_ids["app"]
-     security_group_ids    = [module.security_groups.ids["app"]]
-     instance_profile_name = module.instance_role.instance_profile_name
-     min_size              = 2
-     max_size              = 4
-     target_group_arns     = [module.app_alb.target_group_arn]
-     user_data             = templatefile("${path.module}/templates/app.sh.tftpl", { region = var.aws_region, ssm_prefix = local.ssm_prefix })
-   }
-
+   Everything not listed above (`source`, `ami_id`, `instance_profile_name`, the template's `region`/`ssm_prefix` variables) is identical to the Web version. Add the guard so App servers never run without their NAT, and the deployment's one public address:
+   ```hcl
    resource "terraform_data" "nat_guard" {
      lifecycle {
        precondition {
@@ -305,15 +295,16 @@ output "name" {
      value = "http://${module.web_alb.dns_name}"
    }
    ```
-4. Apply, wait about 5 minutes for the servers to boot, and test the whole path:
+4. Apply, wait about 5 minutes for the servers to boot, and test the whole path — this is also how you'll know `app_alb`/`app_asg` are wired correctly, since the check below only passes if a request actually makes it Browser → Web ALB → Nginx → App ALB → Node.js API and back:
    ```bash
    terraform init -backend-config=backend.hcl
    terraform apply
    curl -s "$(terraform output -raw web_url)" | grep -o '<title>.*</title>'   # <title>Terraform Flashcards</title>
    curl -s "$(terraform output -raw web_url)/api/health"                      # {"status":"ok"}
    ```
-   The second request went Browser → Web ALB → Nginx → App ALB → Node.js API.
 5. Open `web_url` in your browser. You'll see **Terraform Flashcards** with the message *"Cards unavailable … Is the database up?"*. That's expected: the cards live in MySQL, which you add in M7.
+
+**If `/api/health` doesn't return `{"status":"ok"}`** within a few minutes of a healthy `web_url` page: `terraform state list | grep app_a` should show one `alb` and one `asg` under `module.app_alb`/`module.app_asg` — if either is missing, that module call wasn't written. If both exist, re-check every row of the table in step 3 against what you wrote; a `subnet_ids` or security-group input pointed at the wrong tier is the most common miss. `run_on_tier app 'curl -s localhost:8080/health'` (the helper above) tells you whether the App servers themselves are healthy, independent of the ALB in front of them.
 
 ## Lab exercise
 
@@ -349,6 +340,7 @@ Add a target-tracking scaling policy to the `asg` module that keeps average CPU 
 ## Checkpoint (self-assessed)
 
 - [ ] `alb` and `asg` are each one module, each called twice.
+- [ ] You wrote `module "app_alb"` and `module "app_asg"` yourself, from the pattern in `web_alb`/`web_asg`, with no code given.
 - [ ] `web_url` shows the Flashcard Quiz page, and `/api/health` returns `{"status":"ok"}` through both ALBs.
 - [ ] The only `0.0.0.0/0` ingress left is on the Web ALB's security group.
 - [ ] A terminated App server was replaced automatically.

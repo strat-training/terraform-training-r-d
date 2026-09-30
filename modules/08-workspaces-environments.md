@@ -40,6 +40,8 @@ Run `dev` and `prod` from one codebase. Create workspaces, size everything from 
   - [Conditional expressions](https://developer.hashicorp.com/terraform/language/expressions/conditionals)
   - [Validate configuration (preconditions)](https://developer.hashicorp.com/terraform/language/validate)
 
+**A note on workspaces vs. separate directories.** Some engineering standards recommend a separate root directory per environment instead of workspaces, and a single `terraform.tfvars` instead of `-var-file`. Those are reasonable defaults for a large team running many long-lived environments with different owners. This course uses workspaces plus one tfvars file per environment instead: it's one small, short-lived environment per learner, and workspaces keep the whole `dev`/`prod` story in one codebase you can read start to finish — which matters more here than it would on a real team's infrastructure. If you use Terraform professionally, weigh both against your own team's size, environment count and how independent those environments need to be; the Workspaces link above covers the trade-off directly.
+
 ## Hands-on lab
 
 **What you'll build:** one codebase with one state per workspace. `dev` is applied, `prod` is only planned, and `default` is rejected.
