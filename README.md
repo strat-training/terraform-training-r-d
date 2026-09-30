@@ -93,7 +93,7 @@ The code map, the module wiring and more diagrams are in [Capstone requirements]
 
 ## Project Structure
 
-```
+```text
 .
 ├── modules/                                   # Course content: one file per module, plus the capstone
 │   ├── 01-terraform-fundamentals-remote-state.md  # M1  Lifecycle, local state → S3 remote state, validation

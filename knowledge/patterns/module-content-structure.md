@@ -3,7 +3,8 @@
 Each content-pack file (`modules/track-<a|b>-NN-<topic-slug>.md`, or
 `modules/shared-NN-<topic-slug>.md` for a pack both tracks use; `NN` is the
 two-digit order within the track, continuing after the shared packs) follows this
-section structure. If no track a or b, then remove it (`NN-<topic-slug>.md`)
+section structure. See `modules/week-01-linux-fundamentals-cli-basics.md`
+for a filled-in example.
 
 ```markdown
 # Week N — <Topic> (M<start>–M<end>)
@@ -22,14 +23,8 @@ section structure. If no track a or b, then remove it (`NN-<topic-slug>.md`)
 ## Hands-on lab
 ### M<n> — <lab section, one per module in this pack>
 ## Lab exercise
-## Next steps
 ## Checkpoint (self-assessed)
 ```
-
-**Next steps** (optional per pack): small capstone tasks with a hint and a
-"Done when" line, **never** a reference solution. The Lab exercise stays as
-solved practice. Use it when a task is part of a capstone deliverable, so the
-capstone isn't handed over complete.
 
 ## Section Definitions (Reusable Format)
 
