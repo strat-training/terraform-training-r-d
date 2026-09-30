@@ -1,0 +1,8 @@
+/* Flashcard Quiz theme, served from Azure Blob Storage (M12). It overrides the
+   built-in styles, so you can see at a glance that the Azure assets loaded. */
+body { background: linear-gradient(160deg, #eaf2fb 0%, #f7f3ff 100%); }
+h1 { color: #5b3cc4; letter-spacing: .02em; }
+.card { border-top: 6px solid #5b3cc4; }
+.card.flipped { background: #f1ecff; }
+button { border-color: #5b3cc4; color: #5b3cc4; }
+button:hover { background: #5b3cc4; color: #fff; }

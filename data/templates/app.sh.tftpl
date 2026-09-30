@@ -1,0 +1,147 @@
+#!/bin/bash
+# App tier: the Flashcard Quiz API (Node.js) on port 8080.
+#   GET  /health   -> {"status":"ok"}             (ALB health check, never touches the DB)
+#   GET  /db       -> can this server reach MySQL on 3306?
+#   GET  /cards    -> the flashcards, from MySQL
+#   POST /answers  -> save one answer, return the new score
+#   GET  /stats    -> score so far, and which server answered
+#   GET  /config   -> where the Azure assets live (from SSM, once M12 publishes it)
+# The API starts at once. It connects to MySQL as soon as M7 publishes the DB details
+# to SSM, creates its tables and seeds 10 cards (safe to repeat).
+set -uo pipefail
+export DEBIAN_FRONTEND=noninteractive
+
+# ---- Node.js LTS: pinned version, verified against the official checksum ----
+NODE_VERSION=v24.21.0
+NODE_SHA256=fd8e59d5a511510f6a298afb548f18c7d2b1be404d8b4a27d94fbe49f56cb2d6
+cd /tmp
+curl -fsSLO "https://nodejs.org/dist/$NODE_VERSION/node-$NODE_VERSION-linux-x64.tar.xz"
+echo "$NODE_SHA256  node-$NODE_VERSION-linux-x64.tar.xz" | sha256sum -c - || exit 1
+tar -xJf "node-$NODE_VERSION-linux-x64.tar.xz" -C /usr/local --strip-components=1
+snap install aws-cli --classic
+
+# ---- The API ----
+mkdir -p /opt/api && cd /opt/api
+npm init -y >/dev/null
+npm install --omit=dev --no-audit --no-fund mysql2@3.24.4 >/dev/null
+
+cat > /opt/api/server.js <<'JS'
+const http = require("http");
+const net = require("net");
+const os = require("os");
+const { execFile } = require("child_process");
+const mysql = require("mysql2/promise");
+
+const REGION = process.env.REGION;
+const SSM_PREFIX = process.env.SSM_PREFIX;
+const SEED = [
+  [1, "Basics", "Which command shows what Terraform will change, without changing anything?", "terraform plan"],
+  [2, "Basics", "Which file does Terraform use to remember what it created?", "The state file (terraform.tfstate)"],
+  [3, "State", "Which S3 backend setting turns on native state locking?", "use_lockfile = true"],
+  [4, "Language", "Which meta-argument creates one resource per map key?", "for_each"],
+  [5, "Language", "Which block reads existing infrastructure without managing it?", "A data block (data source)"],
+  [6, "Modules", "How can a root module read a value from a child module?", "Only through an output block"],
+  [7, "Networking", "What lets servers in a private subnet reach the internet outbound?", "A NAT Gateway"],
+  [8, "Security", "Why does the DB security group need no egress rule for replies?", "Security groups are stateful"],
+  [9, "Environments", "Which expression holds the current workspace name?", "terraform.workspace"],
+  [10, "Lifecycle", "How do you prove nothing is left after terraform destroy?", "terraform state list prints nothing"]
+];
+
+function aws(args) {
+  return new Promise(function (resolve) {
+    execFile("aws", args.concat(["--region", REGION, "--output", "text"]), function (err, out) {
+      resolve(err ? null : out.trim());
+    });
+  });
+}
+function ssm(name) {
+  return aws(["ssm", "get-parameter", "--name", SSM_PREFIX + name, "--query", "Parameter.Value"]);
+}
+
+let pool = null;
+async function db() {
+  if (pool) return pool;
+  const host = await ssm("/db/endpoint");
+  const arn = await ssm("/db/secret_arn");
+  if (!host || !arn) throw new Error("database not published to SSM yet");
+  const secret = JSON.parse(await aws(["secretsmanager", "get-secret-value", "--secret-id", arn, "--query", "SecretString"]));
+  const p = mysql.createPool({ host: host, user: secret.username, password: secret.password, database: "app", connectionLimit: 5 });
+  await p.query("CREATE TABLE IF NOT EXISTS flashcards (id INT PRIMARY KEY, topic VARCHAR(40) NOT NULL, question VARCHAR(255) NOT NULL, answer VARCHAR(255) NOT NULL)");
+  await p.query("CREATE TABLE IF NOT EXISTS answers (id INT AUTO_INCREMENT PRIMARY KEY, card_id INT NOT NULL, correct BOOLEAN NOT NULL, answered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)");
+  await p.query("INSERT IGNORE INTO flashcards (id, topic, question, answer) VALUES ?", [SEED]);
+  pool = p;
+  return pool;
+}
+
+async function stats() {
+  const [rows] = await (await db()).query("SELECT COUNT(*) AS answered, COALESCE(SUM(correct), 0) AS correct FROM answers");
+  return { answered: Number(rows[0].answered), correct: Number(rows[0].correct), servedBy: os.hostname() };
+}
+
+function tcpCheck(host) {
+  return new Promise(function (resolve) {
+    const s = net.createConnection({ host: host, port: 3306, timeout: 3000 });
+    s.on("connect", function () { s.destroy(); resolve(true); });
+    s.on("timeout", function () { s.destroy(); resolve(false); });
+    s.on("error", function () { resolve(false); });
+  });
+}
+
+function send(res, code, body) {
+  res.writeHead(code, { "Content-Type": "application/json" });
+  res.end(JSON.stringify(body));
+}
+
+function readJson(req) {
+  return new Promise(function (resolve, reject) {
+    let data = "";
+    req.on("data", function (c) { data += c; if (data.length > 1000) req.destroy(); });
+    req.on("end", function () { try { resolve(JSON.parse(data)); } catch (e) { reject(new Error("invalid JSON")); } });
+  });
+}
+
+http.createServer(async function (req, res) {
+  try {
+    if (req.method === "GET" && req.url === "/health") return send(res, 200, { status: "ok" });
+    if (req.method === "GET" && req.url === "/db") {
+      const host = await ssm("/db/endpoint");
+      if (!host) return send(res, 503, { db: "unset" });
+      return (await tcpCheck(host)) ? send(res, 200, { db: "reachable", host: host }) : send(res, 503, { db: "unreachable", host: host });
+    }
+    if (req.method === "GET" && req.url === "/config") return send(res, 200, { assetBaseUrl: await ssm("/assets/base_url") });
+    if (req.method === "GET" && req.url === "/cards") {
+      const [rows] = await (await db()).query("SELECT id, topic, question, answer FROM flashcards ORDER BY id");
+      return send(res, 200, rows);
+    }
+    if (req.method === "GET" && req.url === "/stats") return send(res, 200, await stats());
+    if (req.method === "POST" && req.url === "/answers") {
+      const body = await readJson(req);
+      if (!Number.isInteger(body.cardId) || typeof body.correct !== "boolean") return send(res, 400, { error: "cardId (integer) and correct (boolean) are required" });
+      await (await db()).query("INSERT INTO answers (card_id, correct) VALUES (?, ?)", [body.cardId, body.correct]);
+      return send(res, 201, await stats());
+    }
+    return send(res, 404, { error: "not found" });
+  } catch (err) {
+    return send(res, 503, { error: err.message });
+  }
+}).listen(8080);
+JS
+
+cat > /etc/systemd/system/api.service <<UNIT
+[Unit]
+Description=Flashcard Quiz API
+After=network-online.target
+
+[Service]
+Environment=REGION=${region}
+Environment=SSM_PREFIX=${ssm_prefix}
+Environment=PATH=/usr/local/bin:/usr/bin:/bin:/snap/bin
+WorkingDirectory=/opt/api
+ExecStart=/usr/local/bin/node /opt/api/server.js
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+systemctl daemon-reload
+systemctl enable --now api.service

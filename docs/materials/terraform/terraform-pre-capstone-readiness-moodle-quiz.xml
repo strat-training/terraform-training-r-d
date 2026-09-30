@@ -1,0 +1,167 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Terraform Bootcamp: Pre-Capstone Readiness Quiz — Moodle XML import format
+  Purpose: Diagnostic before the capstone demo (after M12). Checks the nuances and
+           scenarios learners must be able to explain live, based on the course's
+           modules, ADRs and the Flashcard Quiz capstone.
+  Duration: 20 minutes | 10 questions | Diagnostic only (not pass/fail)
+  Scoring tiers: 9-10 Ready to demo, 7-8 Nearly ready, 4-6 Review the flagged modules, 0-3 Not yet ready
+  Import: Question bank → Import → Moodle XML format
+-->
+<quiz>
+
+<question type="category">
+  <category><text>$course$/Terraform Bootcamp Pre-Capstone Readiness</text></category>
+</question>
+
+<!-- ============================================================ -->
+<!-- SECTION 1: NUANCES AND GOTCHAS (5 questions)                  -->
+<!-- ============================================================ -->
+
+<question type="multichoice">
+  <name><text>TF01 — S3 Native State Locking</text></name>
+  <questiontext format="html"><text><![CDATA[<p>Your <code>capstone/aws</code> root keeps its state in S3. Which backend setting makes two runs unable to change the state at the same time, <strong>without</strong> a DynamoDB table?</p>]]></text></questiontext>
+  <answer fraction="100"><text>use_lockfile = true</text></answer>
+  <answer fraction="0"><text>dynamodb_table = "tf-locks" — the S3 backend needs it for locking</text></answer>
+  <answer fraction="0"><text>encrypt = true — it encrypts the state and locks it during a run</text></answer>
+  <answer fraction="0"><text>Versioning on the state bucket — each run writes a new version, so runs can't overwrite each other</text></answer>
+  <shuffleanswers>1</shuffleanswers>
+  <single>true</single>
+  <defaultgrade>1</defaultgrade>
+</question>
+
+<question type="multichoice">
+  <name><text>TF02 — Where the Generated Password Lives</text></name>
+  <questiontext format="html"><text><![CDATA[<p>The <code>rds-mysql</code> module generates the database password with <code>random_password</code> and stores it in Secrets Manager. <code>terraform plan</code> shows it only as <code>(sensitive value)</code>.</p>
+<p>Where else does the password exist, and why does that matter?</p>]]></text></questiontext>
+  <answer fraction="100"><text>In the Terraform state (the random_password result), which is why the state bucket must be encrypted and private</text></answer>
+  <answer fraction="0"><text>Nowhere else: a value marked sensitive is never written to state</text></answer>
+  <answer fraction="0"><text>Only in Secrets Manager: Terraform discards the value once the secret version is created</text></answer>
+  <answer fraction="0"><text>In .terraform.lock.hcl, which is why the lock file must never be committed</text></answer>
+  <shuffleanswers>1</shuffleanswers>
+  <single>true</single>
+  <defaultgrade>1</defaultgrade>
+</question>
+
+<question type="multichoice">
+  <name><text>TF03 — Replies Without an Egress Rule</text></name>
+  <questiontext format="html"><text><![CDATA[<p>In the capstone, the DB security group has <strong>one ingress rule</strong> (3306 from the App group) and <strong>zero egress rules</strong>. Yet the Flashcard API still gets its query results back from MySQL. Why?</p>]]></text></questiontext>
+  <answer fraction="100"><text>Security groups are stateful: replies to an allowed inbound connection are allowed back automatically</text></answer>
+  <answer fraction="0"><text>Terraform keeps AWS's default allow-all egress rule on every new security group</text></answer>
+  <answer fraction="0"><text>The DB route table has a route back to the App subnets, and routes override security groups</text></answer>
+  <answer fraction="0"><text>The replies travel through the S3 gateway endpoint attached to the DB route table</text></answer>
+  <shuffleanswers>1</shuffleanswers>
+  <single>true</single>
+  <defaultgrade>1</defaultgrade>
+</question>
+
+<question type="multichoice">
+  <name><text>TF04 — Attaching a New Parameter Group</text></name>
+  <questiontext format="html"><text><![CDATA[<p>You attach a <strong>new</strong> parameter group to the running RDS instance:</p>
+<pre>parameter {
+  name         = "slow_query_log"
+  value        = "1"
+  apply_method = "immediate"
+}</pre>
+<p>The plan says <code>aws_db_instance.this will be updated in-place</code>, and the apply succeeds. Is the slow-query log on now?</p>]]></text></questiontext>
+  <answer fraction="100"><text>Not yet: a newly attached group applies, even its dynamic parameters, only after one reboot (status pending-reboot)</text></answer>
+  <answer fraction="0"><text>Yes: slow_query_log is dynamic and apply_method is "immediate", so it takes effect with no reboot</text></answer>
+  <answer fraction="0"><text>No: attaching a parameter group replaces the DB instance, so it's on only after the new instance is created</text></answer>
+  <answer fraction="0"><text>No: with create_before_destroy the group only becomes active on the next terraform apply</text></answer>
+  <shuffleanswers>1</shuffleanswers>
+  <single>true</single>
+  <defaultgrade>1</defaultgrade>
+</question>
+
+<question type="multichoice">
+  <name><text>TF05 — Removing the First Item: count vs for_each</text></name>
+  <questiontext format="html"><text><![CDATA[<p>Three instances are built from a list with <code>count</code>:</p>
+<pre>names = ["web-a", "web-b", "web-c"]   # removing "web-a"</pre>
+<p>What does the next plan do, compared with building them with <code>for_each</code> over a map keyed by name?</p>]]></text></questiontext>
+  <answer fraction="100"><text>With count, the later indexes shift: [0] and [1] change or are replaced, and [2] is destroyed. With for_each, only "web-a" is destroyed</text></answer>
+  <answer fraction="0"><text>Both behave the same: only the instance named "web-a" is destroyed</text></answer>
+  <answer fraction="0"><text>With count, only [0] is destroyed; with for_each, all three are replaced because the map changed</text></answer>
+  <answer fraction="0"><text>Neither changes anything until you run terraform state rm on the removed item</text></answer>
+  <shuffleanswers>1</shuffleanswers>
+  <single>true</single>
+  <defaultgrade>1</defaultgrade>
+</question>
+
+<!-- ============================================================ -->
+<!-- SECTION 2: CAPSTONE SCENARIOS (5 questions)                   -->
+<!-- ============================================================ -->
+
+<question type="multichoice">
+  <name><text>TF06 — Planning in the Wrong Workspace</text></name>
+  <questiontext format="html"><text><![CDATA[<p>You forget to select a workspace, so you're in <code>default</code>, and you run:</p>
+<pre>terraform plan -var-file=env/dev.tfvars</pre>
+<p><code>env/dev.tfvars</code> sets <code>environment = "dev"</code>. What happens?</p>]]></text></questiontext>
+  <answer fraction="100"><text>The plan fails at the workspace_guard preconditions: the default workspace is not used, and var.environment must match the workspace</text></answer>
+  <answer fraction="0"><text>The plan fails at variable validation, because "default" is not one of dev, staging or prod</text></answer>
+  <answer fraction="0"><text>The plan succeeds and would create resources named tf-bootcamp-default-*</text></answer>
+  <answer fraction="0"><text>terraform init fails, because the S3 backend has no state file for the default workspace</text></answer>
+  <shuffleanswers>1</shuffleanswers>
+  <single>true</single>
+  <defaultgrade>1</defaultgrade>
+</question>
+
+<question type="multichoice">
+  <name><text>TF07 — Switching Off the NAT Gateway Mid-Capstone</text></name>
+  <questiontext format="html"><text><![CDATA[<p>The full <code>dev</code> stack is applied (App ASG minimum = 1). To save money you run:</p>
+<pre>terraform plan -var-file=env/dev.tfvars -var nat_gateway_enabled=false</pre>
+<p>The root contains this guard:</p>
+<pre>resource "terraform_data" "nat_guard" {
+  lifecycle {
+    precondition {
+      condition     = var.nat_gateway_enabled || local.size.app_min == 0
+      error_message = "App instances need the NAT Gateway. Set nat_gateway_enabled = true."
+    }
+  }
+}</pre>
+<p>What does the plan do?</p>]]></text></questiontext>
+  <answer fraction="100"><text>It fails with "App instances need the NAT Gateway", so nothing is planned</text></answer>
+  <answer fraction="0"><text>Plan: 0 to add, 0 to change, 3 to destroy (the NAT Gateway, its EIP and the App route), as in the M4 lab</text></answer>
+  <answer fraction="0"><text>It destroys the NAT, and the App servers reach the internet through the S3 gateway endpoint instead</text></answer>
+  <answer fraction="0"><text>It moves the App Auto Scaling group into the public subnets so the servers keep internet access</text></answer>
+  <shuffleanswers>1</shuffleanswers>
+  <single>true</single>
+  <defaultgrade>1</defaultgrade>
+</question>
+
+<question type="multichoice">
+  <name><text>TF08 — "Cards Unavailable" Right After Apply</text></name>
+  <questiontext format="html"><text><![CDATA[<p>Your M10 apply has just finished. You open <code>web_url</code>: the Flashcard Quiz page loads, and <code>/api/health</code> returns <code>{"status":"ok"}</code>, but the page says <em>"Cards unavailable … Is the database up?"</em>. What's the right move?</p>]]></text></questiontext>
+  <answer fraction="100"><text>Wait and reload: RDS is the slowest resource, and the API connects as soon as the DB endpoint appears in SSM</text></answer>
+  <answer fraction="0"><text>Start an instance refresh on the App ASG: the API gave up waiting for the database after 20 minutes</text></answer>
+  <answer fraction="0"><text>Open port 3306 on the Web security group, because the page calls the database from the browser</text></answer>
+  <answer fraction="0"><text>Add secretsmanager:GetSecretValue with resource "*" to the instance role so the API can read any secret</text></answer>
+  <shuffleanswers>1</shuffleanswers>
+  <single>true</single>
+  <defaultgrade>1</defaultgrade>
+</question>
+
+<question type="multichoice">
+  <name><text>TF09 — CORS With the Lookup Switched Off</text></name>
+  <questiontext format="html"><text><![CDATA[<p>With the AWS stack up, you apply <code>capstone/multicloud</code> with <code>-var lookup_web_alb=false</code>, so the CORS rule's allowed origin falls back to <code>http://localhost:8080</code>. You reload the Flashcard Quiz from <code>web_url</code>. What does its footer say about the Azure assets?</p>]]></text></questiontext>
+  <answer fraction="100"><text>"Azure Blob ✗ (blocked by CORS)": the logo is loaded with fetch(), and Azure doesn't allow the Web ALB's origin</text></answer>
+  <answer fraction="0"><text>"Azure Blob ✓ (CORS allowed)": the container allows anonymous blob reads, so CORS doesn't apply</text></answer>
+  <answer fraction="0"><text>"built-in styles (Azure not connected yet)": the app ignores Azure whenever the lookup is off</text></answer>
+  <answer fraction="0"><text>Nothing: the whole page fails to load, because index.html is served from Azure</text></answer>
+  <shuffleanswers>1</shuffleanswers>
+  <single>true</single>
+  <defaultgrade>1</defaultgrade>
+</question>
+
+<question type="multichoice">
+  <name><text>TF10 — Is the Account Really Clean?</text></name>
+  <questiontext format="html"><text><![CDATA[<p>While debugging, you launched an EC2 instance by hand in the AWS console, in the account's default VPC. At the end of the session you run <code>terraform destroy</code> in both roots, and <code>terraform state list</code> prints nothing in either. Is your account clean?</p>]]></text></questiontext>
+  <answer fraction="100"><text>No: Terraform only tracks what it created. The hand-made instance was never in state, so it's still running and billing</text></answer>
+  <answer fraction="0"><text>Yes: terraform destroy removes every resource tagged Project = tf-bootcamp</text></answer>
+  <answer fraction="0"><text>Yes: the provider's default_tags adopt new resources into state on the next run</text></answer>
+  <answer fraction="0"><text>Yes: if anything were still running, the $5 budget alert would already have warned you</text></answer>
+  <shuffleanswers>1</shuffleanswers>
+  <single>true</single>
+  <defaultgrade>1</defaultgrade>
+</question>
+
+</quiz>

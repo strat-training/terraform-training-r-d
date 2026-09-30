@@ -1,0 +1,143 @@
+#!/bin/bash
+# Web tier: Nginx serves the Flashcard Quiz (React, no build step) at once, and forwards
+# /api/ to the internal App ALB as soon as its address appears in SSM (published in M6).
+set -uo pipefail
+export DEBIAN_FRONTEND=noninteractive
+apt-get update -y
+apt-get install -y nginx
+snap install aws-cli --classic
+
+mkdir -p /var/www/html
+cat > /var/www/html/index.html <<'HTML'
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Terraform Flashcards</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 0; background: #f4f6fb; color: #1b3a5c; }
+    main { max-width: 640px; margin: 2rem auto; padding: 0 1rem; }
+    header { display: flex; align-items: center; gap: .75rem; }
+    .logo { height: 40px; }
+    .card { background: #fff; border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,.12); padding: 2.5rem 1.5rem;
+            font-size: 1.3rem; text-align: center; cursor: pointer; min-height: 6rem; }
+    .card.flipped { background: #e8f1fb; font-weight: 600; }
+    .actions { display: flex; gap: 1rem; justify-content: center; margin: 1rem 0; }
+    button { font-size: 1rem; padding: .6rem 1.2rem; border-radius: 8px; border: 1px solid #2e75b6; background: #fff; cursor: pointer; }
+    .meta, .hint, footer { color: #5b6b7f; font-size: .9rem; }
+    footer { margin-top: 2rem; border-top: 1px solid #d5dce6; padding-top: .75rem; }
+    .error { color: #b3261e; }
+  </style>
+  <script src="https://cdn.jsdelivr.net/npm/react@18.3.1/umd/react.production.min.js"
+          integrity="sha384-DGyLxAyjq0f9SPpVevD6IgztCFlnMF6oW/XQGmfe+IsZ8TqEiDrcHkMLKI6fiB/Z" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/react-dom@18.3.1/umd/react-dom.production.min.js"
+          integrity="sha384-gTGxhz21lVGYNMcdJOyq01Edg0jhn/c22nsx0kyqP0TxaV5WVdsSH1fSDUf5YJj1" crossorigin="anonymous"></script>
+</head>
+<body>
+  <div id="root"></div>
+  <script src="/app.js"></script>
+</body>
+</html>
+HTML
+
+cat > /var/www/html/app.js <<'JS'
+const h = React.createElement;
+const { useState, useEffect } = React;
+
+function api(path, options) {
+  return fetch("/api" + path, options).then(function (r) {
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    return r.json();
+  });
+}
+
+const ASSET_LABELS = {
+  checking: "checking…",
+  off: "built-in styles (Azure not connected yet)",
+  ok: "Azure Blob ✓ (CORS allowed)",
+  blocked: "Azure Blob ✗ (blocked by CORS)"
+};
+
+function App() {
+  const [cards, setCards] = useState([]);
+  const [index, setIndex] = useState(0);
+  const [flipped, setFlipped] = useState(false);
+  const [stats, setStats] = useState({ answered: 0, correct: 0, servedBy: "?" });
+  const [error, setError] = useState(null);
+  const [assets, setAssets] = useState({ state: "checking" });
+
+  useEffect(function () {
+    api("/cards").then(setCards).catch(function (e) { setError("Cards unavailable (" + e.message + "). Is the database up?"); });
+    api("/stats").then(setStats).catch(function () {});
+    api("/config").then(function (cfg) {
+      if (!cfg.assetBaseUrl) return setAssets({ state: "off" });
+      const link = document.createElement("link");
+      link.rel = "stylesheet";
+      link.href = cfg.assetBaseUrl + "/app.css";
+      document.head.appendChild(link);
+      // fetch() is a cross-origin read, so the browser applies Azure's CORS rule here.
+      return fetch(cfg.assetBaseUrl + "/logo.svg")
+        .then(function (r) { if (!r.ok) throw new Error(); return r.blob(); })
+        .then(function (b) { setAssets({ state: "ok", logo: URL.createObjectURL(b) }); })
+        .catch(function () { setAssets({ state: "blocked" }); });
+    }).catch(function () { setAssets({ state: "off" }); });
+  }, []);
+
+  function answer(correct) {
+    api("/answers", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ cardId: cards[index].id, correct: correct })
+    }).then(setStats).catch(function (e) { setError("Could not save your answer (" + e.message + ")"); });
+    setFlipped(false);
+    setIndex((index + 1) % cards.length);
+  }
+
+  const title = h("header", null,
+    assets.logo ? h("img", { src: assets.logo, alt: "", className: "logo" }) : null,
+    h("h1", null, "Terraform Flashcards"));
+
+  if (error) return h("main", null, title, h("p", { className: "error" }, error));
+  if (!cards.length) return h("main", null, title, h("p", null, "Loading cards…"));
+
+  const card = cards[index];
+  return h("main", null,
+    title,
+    h("p", { className: "meta" }, "Card " + (index + 1) + " of " + cards.length + " · " + card.topic),
+    h("section", { className: "card" + (flipped ? " flipped" : ""), onClick: function () { setFlipped(!flipped); } },
+      flipped ? card.answer : card.question),
+    flipped
+      ? h("div", { className: "actions" },
+          h("button", { onClick: function () { answer(true); } }, "I got it"),
+          h("button", { onClick: function () { answer(false); } }, "Not yet"))
+      : h("p", { className: "hint" }, "Click the card to see the answer."),
+    h("footer", null,
+      h("div", null, "Score: " + stats.correct + " / " + stats.answered + " — saved in RDS MySQL"),
+      h("div", null, "Answered by App server: " + stats.servedBy),
+      h("div", null, "Styles and logo: " + ASSET_LABELS[assets.state])));
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(h(App));
+JS
+
+systemctl restart nginx
+
+# Runtime config comes from a later layer, so retry for up to 10 minutes.
+for attempt in $(seq 1 40); do
+  API_BASE_URL=$(aws ssm get-parameter --region ${region} \
+    --name "${ssm_prefix}/api/base_url" --query Parameter.Value --output text 2>/dev/null) && break
+  sleep 15
+done
+
+if [ -n "$${API_BASE_URL:-}" ]; then
+  cat > /etc/nginx/sites-available/default <<NGINX
+server {
+  listen 80 default_server;
+  root /var/www/html;
+  location / { try_files \$uri \$uri/ =404; }
+  location /api/ { proxy_pass $${API_BASE_URL}/; }
+}
+NGINX
+  systemctl reload nginx
+fi
